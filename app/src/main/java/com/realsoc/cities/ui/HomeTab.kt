@@ -36,8 +36,8 @@ import com.google.accompanist.navigation.animation.AnimatedNavHost
 import com.google.accompanist.navigation.animation.composable
 import com.google.accompanist.navigation.animation.rememberAnimatedNavController
 import com.realsoc.cities.R
-import com.realsoc.cities.clearSearch
 import com.realsoc.cities.ui.theme.CitiesTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Home Screen Composable.
@@ -47,7 +47,12 @@ import com.realsoc.cities.ui.theme.CitiesTheme
 @Suppress("EXPERIMENTAL_IS_NOT_ENABLED")
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun HomeScreen() {
+fun HomeScreen(
+    searchTabState: State<SearchTabState>,
+    countriesTabState: State<CountriesTabState>,
+    favoriteCitiesState: State<FavoriteCitiesState>,
+    onTextChanged: (newText: String) -> Unit
+) {
     val navController = rememberAnimatedNavController()
     Scaffold(
         bottomBar = {
@@ -74,9 +79,9 @@ fun HomeScreen() {
         }
     ) { innerPadding ->
         AnimatedNavHost(navController, startDestination = HomeTab.Search.route, Modifier.padding(innerPadding)) {
-            composableFadeInAndOut(route = HomeTab.Search.route) { SearchCityContent() }
-            composableFadeInAndOut(route = HomeTab.Countries.route) { CountriesContent() }
-            composableFadeInAndOut(route = HomeTab.Favorites.route) { FavoriteCitiesContent() }
+            composableFadeInAndOut(route = HomeTab.Search.route) { SearchCityContent(searchTabState, onTextChanged) }
+            composableFadeInAndOut(route = HomeTab.Countries.route) { CountriesContent(countriesTabState) }
+            composableFadeInAndOut(route = HomeTab.Favorites.route) { FavoriteCitiesContent(favoriteCitiesState) }
         }
     }
 }
@@ -85,11 +90,33 @@ fun HomeScreen() {
  * Search city tab.
  */
 @Composable
-fun SearchCityContent() {
+fun SearchCityContent(searchTabState: State<SearchTabState>, onTextChanged: (newText: String) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        SearchCityField()
-        GeographicItemList(listOf("Toulouse", "Paris", "Three"), Icons.Default.Favorite, testTag =
-        "search_city_result_list")
+        val searchString = (searchTabState.value as? SearchTabState.Loading)?.searchString ?: (searchTabState.value as?
+                SearchTabState.Success)?.searchString ?: ""
+        SearchCityField(searchString, onTextChanged = onTextChanged)
+        with (searchTabState.value) {
+            when(this) {
+                is SearchTabState.Success -> {
+                    GeographicItemList(cities, Icons.Default.Favorite, testTag =
+                    "search_city_result_list")
+                }
+                is SearchTabState.Loading -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+                is SearchTabState.Error -> {
+                    Error(error = exception)
+                }
+                is SearchTabState.Init -> {
+                    NothingYet()
+                }
+            }
+        }
     }
 }
 
@@ -97,17 +124,69 @@ fun SearchCityContent() {
  * Country list tab.
  */
 @Composable
-fun CountriesContent() {
-    GeographicItemList(listOf("Albania", "France", "Portugal"), testTag = "country_list")
+fun CountriesContent(countriesTabState: State<CountriesTabState>) {
+    with(countriesTabState.value) {
+        when(this) {
+            is CountriesTabState.Success -> {
+                GeographicItemList(countries, testTag = "country_list")
+            }
+            is CountriesTabState.Error -> {
+                Error(error = exception)
+            }
+            is CountriesTabState.Init -> {
+                NothingYet()
+            }
+        }
+    }
 }
 
 /**
  * Favorite city list tab.
  */
 @Composable
-fun FavoriteCitiesContent() {
-    GeographicItemList(listOf("Toulouse", "Montpellier", "Tata"), Icons.Default.Favorite, testTag =
-    "favorite_city_list")
+fun FavoriteCitiesContent(favoriteCitiesState: State<FavoriteCitiesState>) {
+    with(favoriteCitiesState.value) {
+        when(this) {
+            is FavoriteCitiesState.Success -> {
+                GeographicItemList(favoriteCities, Icons.Default.Favorite, testTag = "favorite_city_list")
+            }
+            is FavoriteCitiesState.Error -> {
+                Error(error = exception)
+            }
+            is FavoriteCitiesState.Init -> {
+                NothingYet()
+            }
+        }
+    }
+}
+
+@Composable
+fun NothingYet() {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Text(text = "N0THING Y3T", modifier = Modifier
+            .align(Alignment.Center)
+            .testTag("nothing_yet_label"), fontSize
+        = 20.sp)
+    }
+}
+
+@Composable
+fun Error(error: Throwable) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "An error occurred ?",
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            fontSize = 20.sp
+        )
+        Text(
+            text = error.localizedMessage ?: "Unknown error",
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            fontSize = 14.sp
+        )
+    }
 }
 
 /**
@@ -122,7 +201,7 @@ fun NavGraphBuilder.composableFadeInAndOut(
     route: String,
     content: @Composable AnimatedVisibilityScope.(NavBackStackEntry) -> Unit
 ) {
-    val animDuration = 80
+    val animDuration = 600
     composable(
         route,
         enterTransition = { fadeIn(animationSpec = tween(animDuration)) },
@@ -137,7 +216,9 @@ fun NavGraphBuilder.composableFadeInAndOut(
  */
 @Composable
 fun GeographicItemList(list: List<String>, imageVector: ImageVector? = null, testTag: String = "") {
-    LazyColumn(modifier = Modifier.fillMaxSize().testTag(testTag)) {
+    LazyColumn(modifier = Modifier
+        .fillMaxSize()
+        .testTag(testTag)) {
         itemsIndexed(list) { index, element ->
             GeographicItem(
                 element,
@@ -198,16 +279,18 @@ fun GeographicItem(
  * Search city component.
  */
 @Composable
-fun SearchCityField() {
-    var text: String by remember { mutableStateOf("") }
+fun SearchCityField(initText: String, onTextChanged: (newText: String) -> Unit) {
+    var text: String by remember { mutableStateOf(initText) }
 
     OutlinedTextField(
         value = text,
-        onValueChange = { text = it },
+        onValueChange = {
+            text = it
+            onTextChanged(it) },
         label = { Text("City") },
         leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search") },
         trailingIcon = { Icon(imageVector = Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier
-            .clickable(onClick = ::clearSearch)) },
+            .clickable(onClick = {})) },
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 10.dp, end = 10.dp, top = 15.dp)
@@ -220,7 +303,12 @@ fun SearchCityField() {
 @Composable
 fun DefaultPreview() {
     CitiesTheme {
-        HomeScreen()
+        HomeScreen(
+            MutableStateFlow(SearchTabState.Init).collectAsState(),
+            MutableStateFlow(CountriesTabState.Init).collectAsState(),
+            MutableStateFlow(FavoriteCitiesState.Init).collectAsState(),
+            {}
+        )
     }
 }
 
@@ -248,3 +336,27 @@ class ClickableIcon(
     val onClick: (() -> Unit) = {},
     val contentDescription: String = ""
 )
+
+sealed class CountriesTabState {
+    object Init: CountriesTabState()
+    data class Success(val countries: List<String>): CountriesTabState()
+    data class Error(val exception: Throwable): CountriesTabState()
+}
+
+sealed class SearchTabState {
+    object Init: SearchTabState()
+    data class Success(val searchString: String, val cities: List<String>): SearchTabState()
+    data class Loading(val searchString: String): SearchTabState()
+    data class Error(val exception: Throwable): SearchTabState()
+}
+
+sealed class FavoriteCitiesState {
+    object Init: FavoriteCitiesState()
+    data class Success(val favoriteCities: List<String>): FavoriteCitiesState()
+    data class Error(val exception: Throwable): FavoriteCitiesState()
+}
+
+class Country(val id: String, val name: String)
+class UrbanDivision(val id: String, val name: String, val country: Country)
+class City(val id: String, val name: String, val latLng: LatLng, val favorite: Boolean)
+class LatLng(val lat: Float, lon: Float)
